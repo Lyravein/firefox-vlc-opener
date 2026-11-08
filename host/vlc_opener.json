@@ -1,0 +1,9 @@
+{
+  "name": "vlc_opener",
+  "description": "Native helper to launch VLC with media URLs",
+  "path": "/home/lyravein/.local/bin/vlc-opener-host",
+  "type": "stdio",
+  "allowed_extensions": [
+    "vlc-opener@lyravein.my.id"
+  ]
+}
