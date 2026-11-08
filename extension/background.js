@@ -1,4 +1,18 @@
 const NATIVE_HOST_NAME = "vlc_opener";
+const MEDIA_EXTENSIONS = new Set([
+  ".mp4", ".m3u8", ".mpd", ".webm", ".mkv", ".avi", ".flv", ".mov",
+  ".ogg", ".ogv", ".ts", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".opus"
+]);
+
+function hasMediaExtension(url) {
+  try {
+    const pathname = new URL(url).pathname;
+    const extension = pathname.slice(pathname.lastIndexOf("/") + 1).match(/\\.[^.]+$/)?.[0].toLowerCase();
+    return MEDIA_EXTENSIONS.has(extension);
+  } catch {
+    return false;
+  }
+}
 
 browser.runtime.onInstalled.addListener(() => {
   browser.contextMenus.create({
@@ -13,6 +27,10 @@ browser.contextMenus.onClicked.addListener((info) => {
 
   const candidate = info.srcUrl || info.linkUrl;
   if (candidate) {
+    if (!hasMediaExtension(candidate)) {
+      notify("VLC Opener", "URL does not have an allowed direct media extension");
+      return;
+    }
     sendUrlToVlc(candidate);
   } else {
     notify("VLC Opener", "No media URL found in clicked target.");
@@ -49,6 +67,10 @@ browser.action.onClicked.addListener(async (tab) => {
     });
     const outcome = results[0]?.result;
     if (outcome?.found) {
+      if (!hasMediaExtension(outcome.url)) {
+        notify("VLC Opener", "URL does not have an allowed direct media extension");
+        return;
+      }
       sendUrlToVlc(outcome.url);
     } else {
       notify("VLC Opener", outcome?.error || "Unable to detect a video URL.");

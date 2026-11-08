@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
+import os
 import sys
+
+_HOST_DIR = os.path.dirname(os.path.realpath(__file__))
+if _HOST_DIR not in sys.path:
+    sys.path.insert(0, _HOST_DIR)
 
 from protocol import read_message, write_message
 from validator import validate_media_url

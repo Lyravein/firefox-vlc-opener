@@ -9,13 +9,15 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp_dir/bin/vlc"
 chmod +x "$tmp_dir/bin/vlc"
 export PATH="$tmp_dir/bin:$PATH"
 
-python3 - "$repo_dir/host/vlc_opener_host.py" <<'PY'
+ln -s "$repo_dir/host/vlc_opener_host.py" "$tmp_dir/bin/vlc-opener-host"
+python3 - "$repo_dir/host/vlc_opener_host.py" "$tmp_dir/bin/vlc-opener-host" <<'PY'
 import json
 import struct
 import subprocess
 import sys
 
 host = sys.argv[1]
+symlink = sys.argv[2]
 
 def run(payload):
     framed = struct.pack("<I", len(payload)) + payload
@@ -49,5 +51,17 @@ result = subprocess.run(
     stderr=subprocess.PIPE, check=False, timeout=5,
 )
 assert result.returncode == 0, (result.returncode, result.stderr)
-print("All 5 pipeline tests passed.")
+
+# Test 6: invoking through a symlink in another directory loads sibling modules.
+framed = struct.pack("<I", len(json.dumps({"url": "https://example.com/sample.mp4"}).encode())) + json.dumps({"url": "https://example.com/sample.mp4"}).encode()
+result = subprocess.run(
+    [symlink], input=framed, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    check=False, timeout=5,
+)
+assert result.returncode == 0, (result.returncode, result.stderr)
+size = struct.unpack("<I", result.stdout[:4])[0]
+response = json.loads(result.stdout[4:4 + size])
+assert response.get("success") is True, response
+print("All 6 pipeline tests passed.")
+
 PY
