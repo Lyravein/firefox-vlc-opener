@@ -1,5 +1,5 @@
 import unittest
-from host.validator import validate_media_url
+from host.validator import validate_media_url, validate_request
 
 class TestMediaUrlValidator(unittest.TestCase):
     def test_valid_http_media_urls(self):
@@ -65,6 +65,63 @@ class TestMediaUrlValidator(unittest.TestCase):
         for url in adversarial_urls:
             ok, err = validate_media_url(url)
             self.assertFalse(ok, f"Expected rejection for adversarial URL: {url}")
+
+    def test_valid_direct_media_with_referer(self):
+        ok, mode, url, ref = validate_request(
+            "https://cdn.example.com/stream.m3u8",
+            referer="https://anime.example.com/watch/123"
+        )
+        self.assertTrue(ok)
+        self.assertEqual(mode, "direct")
+        self.assertEqual(url, "https://cdn.example.com/stream.m3u8")
+        self.assertEqual(ref, "https://anime.example.com/watch/123")
+
+    def test_valid_direct_with_is_direct_hint(self):
+        ok, mode, url, ref = validate_request(
+            "https://cdn.example.com/stream_without_extension?token=abc",
+            is_direct=True
+        )
+        self.assertTrue(ok)
+        self.assertEqual(mode, "direct")
+
+    def test_valid_page_url_for_ytdlp_mode(self):
+        ok, mode, url, ref = validate_request(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            referer=None
+        )
+        self.assertTrue(ok)
+        self.assertEqual(mode, "ytdlp")
+        self.assertEqual(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.assertIsNone(ref)
+
+    def test_reject_dangerous_referer(self):
+        ok, mode, err, ref = validate_request(
+            "https://cdn.example.com/stream.mp4",
+            referer="javascript:alert(1)"
+        )
+        self.assertFalse(ok)
+        self.assertIn("referer", err.lower())
+
+    def test_reject_referer_with_control_chars(self):
+        ok, mode, err, ref = validate_request(
+            "https://cdn.example.com/stream.mp4",
+            referer="https://example.com/\x00evil"
+        )
+        self.assertFalse(ok)
+
+    def test_reject_referer_credentials_and_bad_port(self):
+        bad_referers = [
+            "https://user:pass@example.com/",
+            "https://example.com:999999/",
+            "https://@/",
+        ]
+        for ref in bad_referers:
+            ok, mode, err, cleaned_ref = validate_request(
+                "https://cdn.example.com/stream.mp4",
+                referer=ref
+            )
+            self.assertFalse(ok)
+            self.assertIn("referer", err.lower())
 
 if __name__ == "__main__":
     unittest.main()
