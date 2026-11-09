@@ -10,6 +10,7 @@ browser.webRequest.onHeadersReceived.addListener((details) => {
   if (recorded && details.tabId >= 0) {
     browser.action.setBadgeText({ tabId: details.tabId, text: "▶" });
     browser.action.setBadgeBackgroundColor({ tabId: details.tabId, color: "#e66014" });
+    browser.tabs.sendMessage(details.tabId, { action: "STREAM_DETECTED" }).catch(() => {});
   }
 }, { urls: ["<all_urls>"] }, ["responseHeaders"]);
 
@@ -39,7 +40,8 @@ function findPageVideoUrl() {
   return video ? { found: true, url: video.currentSrc || video.src } : { found: false };
 }
 
-browser.action.onClicked.addListener(async (tab) => {
+async function handleVlcTrigger(tab) {
+  if (!tab || !tab.id) return;
   const best = tracker.getBestStream(tab.id);
   if (best) {
     sendUrlToVlc(best.url, best.referer, true);
@@ -52,6 +54,21 @@ browser.action.onClicked.addListener(async (tab) => {
     else sendUrlToVlc(tab.url, tab.url, false);
   } catch {
     sendUrlToVlc(tab.url, tab.url, false);
+  }
+}
+
+browser.action.onClicked.addListener(handleVlcTrigger);
+
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "GET_STREAM_STATUS") {
+    const tabId = sender.tab ? sender.tab.id : null;
+    const best = tabId ? tracker.getBestStream(tabId) : null;
+    sendResponse({ hasStream: Boolean(best) });
+    return;
+  }
+  if (message.action === "TRIGGER_VLC") {
+    const tab = sender.tab;
+    if (tab) handleVlcTrigger(tab);
   }
 });
 
