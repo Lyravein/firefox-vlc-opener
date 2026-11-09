@@ -1,82 +1,57 @@
 const NATIVE_HOST_NAME = "vlc_opener";
-const MEDIA_EXTENSIONS = new Set([
-  ".mp4", ".m3u8", ".mpd", ".webm", ".mkv", ".avi", ".flv", ".mov",
-  ".ogg", ".ogv", ".ts", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".opus"
-]);
+const tracker = createStreamTracker();
 
-function hasMediaExtension(url) {
-  try {
-    const pathname = new URL(url).pathname;
-    const extension = pathname.slice(pathname.lastIndexOf("/") + 1).match(/\\.[^.]+$/)?.[0].toLowerCase();
-    return MEDIA_EXTENSIONS.has(extension);
-  } catch {
-    return false;
+browser.webRequest.onBeforeSendHeaders.addListener((details) => {
+  tracker.trackRequest(details.requestId, details.tabId, details.url, details.requestHeaders);
+}, { urls: ["<all_urls>"] }, ["requestHeaders"]);
+
+browser.webRequest.onHeadersReceived.addListener((details) => {
+  const recorded = tracker.recordResponse(details.requestId, details.tabId, details.url, details.statusCode, details.responseHeaders);
+  if (recorded && details.tabId >= 0) {
+    browser.action.setBadgeText({ tabId: details.tabId, text: "▶" });
+    browser.action.setBadgeBackgroundColor({ tabId: details.tabId, color: "#e66014" });
   }
-}
+}, { urls: ["<all_urls>"] }, ["responseHeaders"]);
 
-browser.runtime.onInstalled.addListener(() => {
-  browser.contextMenus.create({
-    id: "vlc-open-media",
-    title: "Open in VLC",
-    contexts: ["link", "video", "audio"]
-  });
+browser.webRequest.onCompleted.addListener((details) => tracker.cleanupRequest(details.requestId), { urls: ["<all_urls>"] });
+browser.webRequest.onErrorOccurred.addListener((details) => tracker.cleanupRequest(details.requestId), { urls: ["<all_urls>"] });
+browser.tabs.onRemoved.addListener((tabId) => tracker.cleanupTab(tabId));
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    tracker.cleanupTab(tabId);
+    browser.action.setBadgeText({ tabId, text: "" });
+  }
 });
 
-browser.contextMenus.onClicked.addListener((info) => {
-  if (info.menuItemId !== "vlc-open-media") return;
+browser.runtime.onInstalled.addListener(() => {
+  browser.contextMenus.create({ id: "vlc-open-media", title: "Open in VLC", contexts: ["link", "video", "audio"] });
+});
 
+browser.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "vlc-open-media") return;
   const candidate = info.srcUrl || info.linkUrl;
-  if (candidate) {
-    if (!hasMediaExtension(candidate)) {
-      notify("VLC Opener", "URL does not have an allowed direct media extension");
-      return;
-    }
-    sendUrlToVlc(candidate);
-  } else {
-    notify("VLC Opener", "No media URL found in clicked target.");
-  }
+  if (candidate) sendUrlToVlc(candidate, tab.url, false);
+  else notify("VLC Opener", "No media URL found in clicked target.");
 });
 
 function findPageVideoUrl() {
-  const videos = Array.from(document.querySelectorAll("video"));
-  if (videos.length === 0) {
-    return { found: false, error: "No video element found on this page." };
-  }
-
-  const activeVideo = videos.find(v => !v.paused && v.currentTime > 0) || videos.find(v => v.currentSrc || v.src) || videos[0];
-  if (activeVideo.mediaKeys) {
-    return { found: false, error: "Video uses DRM (EME/mediaKeys). Cannot open encrypted streams in VLC." };
-  }
-
-  const rawUrl = activeVideo.currentSrc || activeVideo.src || activeVideo.querySelector("source")?.src;
-  if (!rawUrl) {
-    return { found: false, error: "Video element has no readable source." };
-  }
-  if (rawUrl.startsWith("blob:") || rawUrl.startsWith("data:")) {
-    return { found: false, error: "Video uses encrypted or blob MSE stream. Only direct URLs (.mp4, .m3u8, .mpd) can be opened in VLC." };
-  }
-
-  return { found: true, url: rawUrl };
+  const video = Array.from(document.querySelectorAll("video")).find(v => v.currentSrc || v.src);
+  return video ? { found: true, url: video.currentSrc || video.src } : { found: false };
 }
 
 browser.action.onClicked.addListener(async (tab) => {
+  const best = tracker.getBestStream(tab.id);
+  if (best) {
+    sendUrlToVlc(best.url, best.referer, true);
+    return;
+  }
   try {
-    const results = await browser.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: findPageVideoUrl
-    });
+    const results = await browser.scripting.executeScript({ target: { tabId: tab.id }, func: findPageVideoUrl });
     const outcome = results[0]?.result;
-    if (outcome?.found) {
-      if (!hasMediaExtension(outcome.url)) {
-        notify("VLC Opener", "URL does not have an allowed direct media extension");
-        return;
-      }
-      sendUrlToVlc(outcome.url);
-    } else {
-      notify("VLC Opener", outcome?.error || "Unable to detect a video URL.");
-    }
-  } catch (error) {
-    notify("VLC Opener", error.message);
+    if (outcome?.found) sendUrlToVlc(outcome.url, tab.url, true);
+    else sendUrlToVlc(tab.url, tab.url, false);
+  } catch {
+    sendUrlToVlc(tab.url, tab.url, false);
   }
 });
 
@@ -85,22 +60,14 @@ function truncateUrl(url) {
 }
 
 function notify(title, message) {
-  browser.notifications.create({
-    type: "basic",
-    iconUrl: "icons/icon-48.png",
-    title,
-    message
-  });
+  browser.notifications.create({ type: "basic", iconUrl: "icons/icon-48.png", title, message });
 }
 
-async function sendUrlToVlc(url) {
+async function sendUrlToVlc(url, referer = null, isDirect = false) {
   try {
-    const response = await browser.runtime.sendNativeMessage(NATIVE_HOST_NAME, { url });
-    if (response.success) {
-      notify("VLC Opener", "Launching VLC for: " + truncateUrl(url));
-    } else {
-      notify("VLC Opener", response.error);
-    }
+    const response = await browser.runtime.sendNativeMessage(NATIVE_HOST_NAME, { url, referer, is_direct: isDirect });
+    if (response.success) notify("VLC Opener", "Launching VLC for: " + truncateUrl(response.url || url));
+    else notify("VLC Opener", response.error);
   } catch (error) {
     notify("VLC Opener", error.message);
   }

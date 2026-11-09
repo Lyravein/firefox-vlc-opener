@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Open in VLC",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Open direct non-DRM media streams (.mp4, .m3u8, .mpd) in VLC.",
   "browser_specific_settings": {
     "gecko": {
@@ -14,10 +14,12 @@
     "contextMenus",
     "activeTab",
     "scripting",
-    "notifications"
+    "notifications",
+    "webRequest"
   ],
+  "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["stream_tracker.js", "background.js"]
   },
   "action": {
     "default_title": "Open Video in VLC",
