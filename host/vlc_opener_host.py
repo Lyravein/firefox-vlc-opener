@@ -7,7 +7,7 @@ if _HOST_DIR not in sys.path:
     sys.path.insert(0, _HOST_DIR)
 
 from protocol import read_message, write_message
-from validator import validate_media_url
+from validator import validate_request
 from vlc_launcher import launch_vlc
 
 
@@ -19,13 +19,15 @@ def main() -> None:
         write_message(sys.stdout.buffer, {"success": False, "error": "Missing or invalid 'url' in message payload"})
         return
 
-    valid, result = validate_media_url(message["url"])
+    referer = message.get("referer")
+    is_direct = bool(message.get("is_direct", False))
+    valid, mode, clean_url, clean_ref = validate_request(message["url"], referer=referer, is_direct=is_direct)
     if not valid:
-        write_message(sys.stdout.buffer, {"success": False, "error": result})
+        write_message(sys.stdout.buffer, {"success": False, "error": clean_url})
         return
-    launched, launch_msg = launch_vlc(result)
+    launched, launch_msg = launch_vlc(clean_url, referer=clean_ref, mode=mode)
     if launched:
-        write_message(sys.stdout.buffer, {"success": True, "message": launch_msg, "url": result})
+        write_message(sys.stdout.buffer, {"success": True, "message": launch_msg, "url": clean_url, "mode": mode})
     else:
         write_message(sys.stdout.buffer, {"success": False, "error": launch_msg})
 
