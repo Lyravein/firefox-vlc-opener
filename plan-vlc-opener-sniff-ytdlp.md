@@ -4,7 +4,7 @@
 
 **Goal:** Extend Firefox VLC Opener with background network media sniffing (webRequest) and local yt-dlp fallback resolution, enabling one-click VLC playback for iframe-embedded streams, hotlink-protected anime CDNs, and supported web players.
 
-**Architecture:** The WebExtension Manifest V3 uses `webRequest` and `<all_urls>` host permissions to monitor HTTP requests. It uses `onBeforeSendHeaders` to capture the wire `Referer` header and routes streams into a dual-slot tracker per tab (`playlist` slot for .m3u8/.mpd, `direct` slot for .mp4/.webm) so chunk flooding never displaces playlists. The native Python helper (`vlc_opener_host.py`) accepts `url`, optional `referer`, and optional `is_direct` flag: direct streams launch VLC immediately with `--http-referrer`, while arbitrary webpages call local `yt-dlp` (checked via PATH and `/usr/sbin/yt-dlp`) with a 15-second timeout, strictly re-validating the extracted URL for http/https before launching VLC in a detached session.
+**Architecture:** The WebExtension Manifest V3 uses `webRequest` and `<all_urls>` host permissions to monitor HTTP requests. It uses `onBeforeSendHeaders` (with requestHeaders) to correlate and store the exact wire `Referer` per request, and inspects HTTP Range headers and 206 status to ignore fragment chunks. Discovered streams are routed into a dual-slot tracker per tab (`playlist` slot for .m3u8/.mpd, `direct` slot for .mp4/.webm) so chunk flooding never displaces playlists. The native Python helper (`vlc_opener_host.py`) accepts `url`, optional `referer`, and optional `is_direct` flag: direct streams launch VLC immediately with `--http-referrer`, while arbitrary webpages call local `yt-dlp` using single-stream format `-f "b/best"` with a 15-second timeout, strictly validating the extracted URL for http/https before launching VLC in a detached session.
 
 **Tech Stack:** Python 3 (standard library: `subprocess`, `urllib.parse`, `shutil`, `json`, `struct`), `yt-dlp` CLI (installed at `/usr/sbin/yt-dlp`), VLC 3.0, Firefox WebExtensions Manifest V3 (`webRequest`, `action`, `contextMenus`, `scripting`, `notifications`), Node.js (test runner for extension logic).
 
@@ -20,19 +20,20 @@
 - Subprocess execution must always use list arguments with `--` separator: never `shell=True`.
 - VLC referer flag: pass `--http-referrer` followed by the sanitized referer string before `--`.
 - Scheme whitelist: only `http` and `https` schemes permitted for both target URL, extracted resolver URL, and referer.
-- yt-dlp extraction validation: extracted stream URL must be validated for safe http/https scheme and hostname before being passed to `subprocess.Popen`. Non-HTTP schemes (e.g. `file:`) or empty outputs must never reach VLC.
+- yt-dlp extraction validation: pass `-f "b/best"` format selector so a single pre-muxed stream URL is returned. The extracted stream URL must be validated for safe http/https scheme and hostname before being passed to `subprocess.Popen`. Non-HTTP schemes (e.g. `file:`) or empty outputs must never reach VLC.
 - Dual-slot stream tracker: per-tab state maintains separate slots for `playlist` (.m3u8/.mpd) and `direct` (.mp4/.webm); playlist slot takes strict precedence on click and cannot be evicted by MP4 chunks.
-- Sniffer noise reduction: ignore individual HLS/DASH chunk files (`.ts`, `.m4s`, `.aac`, `.vtt`, and byte-range fragment requests).
+- Sniffer noise reduction: ignore individual HLS/DASH chunk files (`.ts`, `.m4s`, `.aac`, `.vtt`, HTTP `Range` header requests, and HTTP 206 Partial Content responses).
+- Request correlation: correlate request headers and response events via `requestId` map with automatic eviction on completed, error, or 60-second timeout.
 - Wire Referer capture: read exact header from `details.requestHeaders` on `onBeforeSendHeaders` with `requestHeaders` extraInfoSpec.
 - Tab lifecycle cleanup: `tabStreams` entries deleted on `tabs.onRemoved` and `tabs.onUpdated` (when status is loading).
 
 ## Review Focus
 
 1. Resolver output security boundary: verify `target_url` extracted from `yt-dlp` is strictly validated as a safe http/https URL before calling `subprocess.Popen`, blocking local path or file scheme execution.
-2. Playlist retention against chunk flooding: verify dual-slot tracker stores `playlist` and `direct` separately so ongoing MP4 segment downloads cannot evict a discovered HLS playlist.
-3. Accurate Referer propagation: verify `Referer` header is captured directly from request headers during `onBeforeSendHeaders` and forwarded to VLC via `--http-referrer`.
-4. Direct stream performance: verify direct media URLs (.mp4, .m3u8) continue to launch VLC directly without invoking `yt-dlp`.
-5. Tab cleanup: verify `tabStreams` entries are pruned on tab close and tab navigation.
+2. Single-stream format selection: verify yt-dlp is invoked with `-f "b/best"` to avoid returning split video-only and audio-only URLs.
+3. Playlist retention against chunk flooding: verify dual-slot tracker stores `playlist` and `direct` separately so ongoing MP4 segment downloads cannot evict a discovered HLS playlist.
+4. Accurate Referer propagation and request correlation: verify `Referer` header is captured directly from request headers during `onBeforeSendHeaders` and correlated with response MIME type events via `requestId`.
+5. Tab and request memory cleanup: verify `tabStreams` entries and `pendingRequests` entries are pruned on tab navigation and request completion.
 
 ---
 
@@ -49,7 +50,7 @@
 
 - [ ] **Step 1: Write failing tests for referer validation, direct hint, and multi-mode resolution**
 
-Add to `tests/test_validator.py`:
+In `tests/test_validator.py`, add imports `from host.validator import validate_request, validate_media_url` and test cases:
 ```python
 def test_valid_direct_media_with_referer(self):
     ok, mode, url, ref = validate_request(
@@ -97,8 +98,8 @@ def test_reject_referer_with_control_chars(self):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/test_validator.py -k "validate_request"`
-Expected: FAIL with `NameError: name 'validate_request' is not defined`
+Run: `python3 -m pytest tests/test_validator.py -k "validate_request"`
+Expected: FAIL with `ImportError` or `NameError`.
 
 - [ ] **Step 3: Implement `validate_request` in `host/validator.py`**
 
@@ -159,7 +160,7 @@ def validate_request(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pytest tests/test_validator.py`
+Run: `python3 -m pytest tests/test_validator.py`
 Expected: All tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -182,11 +183,12 @@ git commit -m "feat(host): add referer validation, direct hint, and multi-mode r
 - `find_ytdlp_binary(custom_bin: str = "yt-dlp") -> str | None`: searches PATH and `/usr/sbin/yt-dlp`, `/usr/bin/yt-dlp`.
 - `launch_vlc(url: str, referer: str | None = None, mode: str = "direct", vlc_bin: str = "vlc", ytdlp_bin: str = "yt-dlp") -> tuple[bool, str]`
   - Validates extracted yt-dlp URL with `validate_request` before invoking VLC!
+  - Passes `-f "b/best"` to yt-dlp to guarantee single combined video+audio stream.
 - `vlc_opener_host.py`: handles payload `{"url": "...", "referer": "...", "is_direct": false}`.
 
 - [ ] **Step 1: Write failing tests for resolver validation, direct bypass, timeout, and failure recovery**
 
-Add to `tests/test_launcher.py`:
+In `tests/test_launcher.py`, ensure imports include `import subprocess`, `from unittest.mock import patch, MagicMock`, `from host.vlc_launcher import launch_vlc, find_ytdlp_binary`:
 ```python
 @patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}")
 @patch("subprocess.Popen")
@@ -229,7 +231,10 @@ def test_launch_vlc_via_ytdlp_resolver_success(self, mock_popen, mock_run, mock_
     ok, msg = launch_vlc("https://example.com/watch/video", mode="ytdlp")
     self.assertTrue(ok)
     mock_run.assert_called_once()
-    self.assertIn("--get-url", mock_run.call_args[0][0])
+    run_cmd = mock_run.call_args[0][0]
+    self.assertIn("--get-url", run_cmd)
+    self.assertIn("-f", run_cmd)
+    self.assertIn("b/best", run_cmd)
     vlc_cmd = mock_popen.call_args[0][0]
     self.assertEqual(vlc_cmd, ["/usr/bin/vlc", "--", "https://resolved.cdn.com/stream.m3u8"])
 
@@ -264,7 +269,7 @@ def test_ytdlp_missing_handled(self, mock_which, mock_find):
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `pytest tests/test_launcher.py -k "test_ytdlp_dangerous_output_rejected"`
+Run: `python3 -m pytest tests/test_launcher.py -k "test_ytdlp_dangerous_output_rejected"`
 Expected: FAIL.
 
 - [ ] **Step 3: Update `host/vlc_launcher.py` and `host/vlc_opener_host.py`**
@@ -302,7 +307,8 @@ def launch_vlc(
         if not resolved_ytdlp:
             return False, "yt-dlp is required to resolve this link but was not found in PATH or standard system paths."
 
-        ytdlp_cmd = [resolved_ytdlp, "--get-url", "--no-warnings"]
+        # Use -f b/best to select single pre-muxed format containing both video and audio
+        ytdlp_cmd = [resolved_ytdlp, "-f", "b/best", "--get-url", "--no-warnings"]
         if referer:
             ytdlp_cmd.extend(["--referer", referer])
         ytdlp_cmd.extend(["--", url])
@@ -354,7 +360,7 @@ Read `url`, optional `referer`, and optional `is_direct` from message. Call `val
 
 - [ ] **Step 4: Run unit tests**
 
-Run: `pytest tests/`
+Run: `python3 -m pytest tests/`
 Expected: 18+ tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -440,14 +446,17 @@ git commit -m "feat(extension): add webRequest and host_permissions for media sn
 
 **Interfaces:**
 - `stream_tracker.js`:
-  - `createStreamTracker()`: maintains per-tab dual-slot state `{ playlist: null, direct: null }`.
-  - `recordStream(tabId, url, referer, contentType)`: classifies stream, filters out `.ts`/`.m4s`/range chunks, places into `playlist` or `direct` slot.
+  - `createStreamTracker()`: maintains per-tab dual-slot state `{ playlist: null, direct: null }` and `pendingRequests` Map.
+  - `trackRequest(requestId, tabId, url, headers)`: inspects headers for `referer` and `range`.
+  - `recordResponse(requestId, tabId, url, statusCode, responseHeaders)`: checks MIME type and 206 status, maps to `playlist` or `direct` slot.
   - `getBestStream(tabId)`: returns `playlist` slot if present, otherwise `direct` slot.
-  - `cleanupTab(tabId)`: removes tab entry.
+  - `cleanupRequest(requestId)`: clears pending request entry.
+  - `cleanupTab(tabId)`: removes tab entries and associated pending requests.
 - `background.js`:
   - Loads `stream_tracker.js`.
-  - Subscribes to `browser.webRequest.onBeforeSendHeaders` (with `requestHeaders`) to capture exact wire `Referer`.
-  - Subscribes to `browser.webRequest.onHeadersReceived` (with `responseHeaders`) to capture MIME-detected streams.
+  - Subscribes to `browser.webRequest.onBeforeSendHeaders` (with `requestHeaders`) to capture exact wire `Referer` and Range headers.
+  - Subscribes to `browser.webRequest.onHeadersReceived` (with `responseHeaders`) to correlate response MIME types.
+  - Subscribes to `onCompleted` and `onErrorOccurred` for request cleanup.
   - On action click: checks `getBestStream(tab.id)`. If found, calls `sendUrlToVlc(stream.url, stream.referer, true)`.
   - If not found: probes DOM `<video>`, then falls back to `tab.url` with `is_direct=false` for yt-dlp resolution.
 
@@ -459,22 +468,28 @@ const { createStreamTracker } = require("../extension/stream_tracker.js");
 
 const tracker = createStreamTracker();
 
-// 1. Chunks are ignored
-assert.strictEqual(tracker.recordStream(1, "https://cdn.com/seg1.ts", "https://page.com"), false);
-assert.strictEqual(tracker.recordStream(1, "https://cdn.com/init.m4s", "https://page.com"), false);
-assert.strictEqual(tracker.recordStream(1, "https://cdn.com/video.mp4?range=0-100", "https://page.com"), false);
+// 1. Chunks with range headers or chunk extensions are ignored
+tracker.trackRequest("req1", 1, "https://cdn.com/seg1.ts", [{ name: "Referer", value: "https://page.com" }]);
+assert.strictEqual(tracker.recordResponse("req1", 1, "https://cdn.com/seg1.ts", 200, [{ name: "Content-Type", value: "video/mp2t" }]), false);
 
-// 2. Direct MP4 recorded
-assert.strictEqual(tracker.recordStream(1, "https://cdn.com/video.mp4", "https://page.com"), true);
+tracker.trackRequest("req2", 1, "https://cdn.com/video.mp4", [{ name: "Range", value: "bytes=0-100" }]);
+assert.strictEqual(tracker.recordResponse("req2", 1, "https://cdn.com/video.mp4", 206, [{ name: "Content-Type", value: "video/mp4" }]), false);
+
+// 2. Direct MP4 recorded with wire referer
+tracker.trackRequest("req3", 1, "https://cdn.com/video.mp4", [{ name: "Referer", value: "https://wire-referer.com" }]);
+assert.strictEqual(tracker.recordResponse("req3", 1, "https://cdn.com/video.mp4", 200, [{ name: "Content-Type", value: "video/mp4" }]), true);
 assert.strictEqual(tracker.getBestStream(1).url, "https://cdn.com/video.mp4");
+assert.strictEqual(tracker.getBestStream(1).referer, "https://wire-referer.com");
 
 // 3. Playlist recorded and strictly prioritized over MP4
-assert.strictEqual(tracker.recordStream(1, "https://cdn.com/master.m3u8", "https://page.com"), true);
+tracker.trackRequest("req4", 1, "https://cdn.com/master.m3u8", [{ name: "Referer", value: "https://wire-referer.com" }]);
+assert.strictEqual(tracker.recordResponse("req4", 1, "https://cdn.com/master.m3u8", 200, [{ name: "Content-Type", value: "application/vnd.apple.mpegurl" }]), true);
 assert.strictEqual(tracker.getBestStream(1).url, "https://cdn.com/master.m3u8");
 
 // 4. Later MP4 chunks NEVER evict discovered playlist
 for (let i = 0; i < 10; i++) {
-  tracker.recordStream(1, `https://cdn.com/segment_${i}.mp4`, "https://page.com");
+  tracker.trackRequest(`req_mp4_${i}`, 1, `https://cdn.com/segment_${i}.mp4`, []);
+  tracker.recordResponse(`req_mp4_${i}`, 1, `https://cdn.com/segment_${i}.mp4`, 200, [{ name: "Content-Type", value: "video/mp4" }]);
 }
 assert.strictEqual(tracker.getBestStream(1).url, "https://cdn.com/master.m3u8");
 
@@ -492,24 +507,67 @@ console.log("Stream tracker unit tests PASSED.");
 
 function createStreamTracker() {
   const tabs = new Map();
+  const pendingRequests = new Map();
 
-  function isIgnoredChunk(url) {
+  function isIgnoredUrl(url) {
     if (!url) return true;
     return /\.(ts|m4s|aac|vtt)(\?.*)?$/i.test(url) || /[\?&]range=/i.test(url) || /[\?&]segment=/i.test(url);
   }
 
   function getStreamType(url, contentType = "") {
-    if (/\.(m3u8|mpd)(\?.*)?$/i.test(url) || contentType.includes("mpegurl") || contentType.includes("dash+xml")) {
+    const ctl = contentType.toLowerCase();
+    if (/\.(m3u8|mpd)(\?.*)?$/i.test(url) || ctl.includes("mpegurl") || ctl.includes("dash+xml")) {
       return "playlist";
     }
-    if (/\.(mp4|webm|mkv|mov)(\?.*)?$/i.test(url) || contentType.startsWith("video/")) {
+    if (/\.(mp4|webm|mkv|mov)(\?.*)?$/i.test(url) || ctl.startsWith("video/")) {
       return "direct";
     }
     return null;
   }
 
-  function recordStream(tabId, url, referer = "", contentType = "") {
-    if (!url || isIgnoredChunk(url)) return false;
+  function trackRequest(requestId, tabId, url, requestHeaders = []) {
+    if (!requestId || tabId < 0 || isIgnoredUrl(url)) return;
+
+    let referer = "";
+    let hasRange = false;
+    for (const h of requestHeaders) {
+      const name = h.name.toLowerCase();
+      if (name === "referer") referer = h.value || "";
+      if (name === "range") hasRange = true;
+    }
+
+    pendingRequests.set(requestId, {
+      tabId,
+      url,
+      referer,
+      hasRange,
+      timestamp: Date.now()
+    });
+
+    // Auto-clean stale pending requests after 60s
+    setTimeout(() => {
+      pendingRequests.delete(requestId);
+    }, 60000);
+  }
+
+  function recordResponse(requestId, tabId, url, statusCode, responseHeaders = []) {
+    const pending = pendingRequests.get(requestId);
+    const referer = pending ? pending.referer : "";
+    const hasRange = pending ? pending.hasRange : false;
+    pendingRequests.delete(requestId);
+
+    if (statusCode === 206 || hasRange || isIgnoredUrl(url)) {
+      return false;
+    }
+
+    let contentType = "";
+    for (const h of responseHeaders) {
+      if (h.name.toLowerCase() === "content-type") {
+        contentType = h.value || "";
+        break;
+      }
+    }
+
     const type = getStreamType(url, contentType);
     if (!type) return false;
 
@@ -519,7 +577,7 @@ function createStreamTracker() {
       tabs.set(tabId, entry);
     }
 
-    const record = { url, referer: referer || "", type, timestamp: Date.now() };
+    const record = { url, referer, type, timestamp: Date.now() };
     if (type === "playlist") {
       entry.playlist = record;
     } else {
@@ -534,11 +592,18 @@ function createStreamTracker() {
     return entry.playlist || entry.direct;
   }
 
-  function cleanupTab(tabId) {
-    tabs.delete(tabId);
+  function cleanupRequest(requestId) {
+    pendingRequests.delete(requestId);
   }
 
-  return { recordStream, getBestStream, cleanupTab, isIgnoredChunk };
+  function cleanupTab(tabId) {
+    tabs.delete(tabId);
+    for (const [reqId, data] of pendingRequests.entries()) {
+      if (data.tabId === tabId) pendingRequests.delete(reqId);
+    }
+  }
+
+  return { trackRequest, recordResponse, getBestStream, cleanupRequest, cleanupTab, isIgnoredUrl };
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -561,18 +626,18 @@ In `extension/manifest.json`:
 ```
 
 In `extension/background.js`:
-- Instantiate `const tracker = createStreamTracker();`
-- Add `browser.webRequest.onBeforeSendHeaders` to read `referer` from headers.
-- Add `browser.webRequest.onHeadersReceived` to read MIME types.
-- Add tab cleanup on `tabs.onRemoved` and `tabs.onUpdated`.
-- Update toolbar action to send `{ url, referer, is_direct }`.
+- Wire `browser.webRequest.onBeforeSendHeaders.addListener` with `["requestHeaders"]` to call `tracker.trackRequest`.
+- Wire `browser.webRequest.onHeadersReceived.addListener` with `["responseHeaders"]` to call `tracker.recordResponse`.
+- Wire `onCompleted` and `onErrorOccurred` to call `tracker.cleanupRequest`.
+- Wire tab cleanup on `tabs.onRemoved` and `tabs.onUpdated`.
+- Wire toolbar action to retrieve `getBestStream` and pass `{ url, referer, is_direct: true }`.
 - Lint with `node -c extension/stream_tracker.js && node -c extension/background.js`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add extension/stream_tracker.js extension/background.js extension/manifest.json tests/test_stream_tracker.js
-git commit -m "feat(extension): implement dual-slot stream tracker, wire referer extraction, and automated unit tests"
+git commit -m "feat(extension): implement request-correlated stream tracker, wire referer extraction, and automated unit tests"
 ```
 
 ---
@@ -586,7 +651,7 @@ git commit -m "feat(extension): implement dual-slot stream tracker, wire referer
 **Interfaces:**
 - `test_cli_pipe.sh` verifies:
   1. Direct media URL launches VLC with `--http-referrer`
-  2. yt-dlp mode triggers when given a page URL and validates extracted URL
+  2. yt-dlp mode triggers when given a page URL, passes `-f "b/best"`, and validates extracted URL
   3. Rejection of dangerous resolver output (e.g. `file://`)
 - `README.md` documents sniffer badge, dual-slot queue, referer forwarding, and yt-dlp resolution.
 
@@ -598,7 +663,7 @@ Verify dangerous output rejection.
 
 - [ ] **Step 2: Run all test suites**
 
-Run: `pytest tests/ && node tests/test_stream_tracker.js && bash test_cli_pipe.sh`
+Run: `python3 -m pytest tests/ && node tests/test_stream_tracker.js && bash test_cli_pipe.sh`
 Expected: All tests pass cleanly.
 
 - [ ] **Step 3: Update `README.md`**
@@ -637,6 +702,6 @@ Expected: Clean working tree, remote up to date.
 1. **Host-permissions warning on extension installation:**
    - Adding `<all_urls>` causes Firefox to display a permission warning ("Access your data for all websites"). This is unavoidable for network sniffing across arbitrary third-party streaming embeds and iframes.
 2. **Segment duplication in HLS streams:**
-   - Solved completely by dual-slot per-tab tracker (`playlist` slot and `direct` slot); playlists are never evicted by segments.
+   - Solved completely by dual-slot per-tab tracker (`playlist` slot and `direct` slot); playlists are never evicted by segments, and HTTP Range/206 requests are filtered out.
 3. **DRM (Widevine / EME):**
    - Sites using Widevine DRM (Netflix, Crunchyroll, etc.) will still fail in VLC because the decrypted keys cannot be extracted. The sniffer will catch the stream manifest, but VLC will fail to decrypt. This is noted in the documentation.
