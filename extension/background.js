@@ -24,13 +24,13 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 browser.runtime.onInstalled.addListener(() => {
-  browser.contextMenus.create({ id: "vlc-open-media", title: "Open in VLC", contexts: ["link", "video", "audio"] });
+  browser.contextMenus.create({ id: "vlc-open-media", title: "Open in VLC", contexts: ["link", "video", "audio", "page"] });
 });
 
 browser.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "vlc-open-media") return;
-  const candidate = info.srcUrl || info.linkUrl;
-  if (candidate) sendUrlToVlc(candidate, tab.url, false);
+  const candidate = info.srcUrl || info.linkUrl || info.pageUrl || tab?.url;
+  if (candidate) sendUrlToVlc(candidate, tab?.url || candidate, false);
   else notify("VLC Opener", "No media URL found in clicked target.");
 });
 
