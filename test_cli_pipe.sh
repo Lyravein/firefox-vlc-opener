@@ -6,7 +6,9 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 mkdir -p "$tmp_dir/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp_dir/bin/vlc"
-chmod +x "$tmp_dir/bin/vlc"
+printf '#!/usr/bin/env bash\ntouch "$YTDLP_CALLED"\nprintf "%%s\\n" "https://resolved.example.com/playlist.m3u8"\n' > "$tmp_dir/bin/yt-dlp"
+chmod +x "$tmp_dir/bin/vlc" "$tmp_dir/bin/yt-dlp"
+export YTDLP_CALLED="$tmp_dir/ytdlp-called"
 export PATH="$tmp_dir/bin:$PATH"
 
 ln -s "$repo_dir/host/vlc_opener_host.py" "$tmp_dir/bin/vlc-opener-host"
@@ -39,8 +41,20 @@ def expect_error(payload, word):
 
 response = run(json.dumps({"url": "https://example.com/sample.mp4"}).encode())
 assert response.get("success") is True, response
+response = run(json.dumps({"url": "https://example.com/anime/episode-1", "referer": "https://example.com/"}).encode())
+assert response.get("success") is True and response.get("mode") == "ytdlp", response
+import os
+assert os.path.exists(os.environ["YTDLP_CALLED"]), "yt-dlp mock was not called"
+response = run(json.dumps({"url": "https://cdn.example.com/video.mp4", "referer": "https://anime.com"}).encode())
+assert response.get("success") is True and response.get("mode") == "direct", response
+response = run(json.dumps({"url": "https://example.com/video", "is_direct": True}).encode())
+assert response.get("success") is True and response.get("mode") == "direct", response
 expect_error("file:///etc/passwd", "scheme")
-expect_error("https://example.com/page?param=mp4", "extension")
+response = run(json.dumps({"url": "https://example.com/page?param=mp4"}).encode())
+assert response.get("success") is True and response.get("mode") == "ytdlp", response
+response = run(json.dumps({"url": "https://cdn.example.com/video.mp4", "referer": "file:///etc/passwd"}).encode())
+assert response.get("success") is False, response
+assert "referer" in str(response.get("error", "")).lower(), response
 response = run(json.dumps({"url": "https://@/video.mp4"}).encode())
 assert response.get("success") is False, response
 assert any(word in str(response.get("error", "")).lower() for word in ("authority", "hostname", "credentials")), response
@@ -62,6 +76,6 @@ assert result.returncode == 0, (result.returncode, result.stderr)
 size = struct.unpack("<I", result.stdout[:4])[0]
 response = json.loads(result.stdout[4:4 + size])
 assert response.get("success") is True, response
-print("All 6 pipeline tests passed.")
+print("All pipeline tests passed.")
 
 PY

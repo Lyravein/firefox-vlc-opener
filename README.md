@@ -1,10 +1,16 @@
 # Firefox VLC Opener
 
-Firefox VLC Opener is a Firefox extension and Linux native messaging host for opening direct media URLs in VLC. It supports `.mp4`, `.m3u8`, `.mpd`, and `.webm` media.
+Firefox VLC Opener is a Firefox extension and Linux native messaging host for opening media in VLC. It combines a passive network media sniffer, a yt-dlp fallback resolver, and hotlink referer forwarding.
+
+## Features
+
+1. **Passive Network Media Sniffer:** Intercepts master playlists (`.m3u8`, `.mpd`) and direct video files (`.mp4`, `.webm`) across pages and embedded iframes. A `▶` badge appears on the toolbar button when media is detected.
+2. **yt-dlp Fallback Resolver:** If no direct stream is captured, clicking the extension icon or right-clicking a web page uses local `yt-dlp` to extract the underlying video stream.
+3. **Hotlink Referer Forwarding:** Automatically captures and passes the wire `Referer` to VLC using `--http-referrer`, helping prevent CDN 403 Forbidden errors.
 
 ## Security and scope
 
-This project handles strictly non-DRM direct URLs. It does not bypass DRM or extract cookies or tokens. URLs are passed to VLC using safe subprocess arguments with `--`. Only `http` and `https` schemes are allowed, and the URL path must have a supported media extension. Native messaging protocol messages are bounded to 1 MB. The extension checks the page media element's `mediaKeys` property to avoid DRM-protected media.
+This project handles strictly non-DRM media. It does not bypass DRM or extract cookies or tokens. URLs are passed to VLC using safe subprocess arguments with `--`. Only `http` and `https` schemes are allowed. Native messaging protocol messages are bounded to 1 MB, and the extension avoids DRM-protected media.
 
 ## Prerequisites
 
@@ -12,8 +18,9 @@ This project handles strictly non-DRM direct URLs. It does not bypass DRM or ext
 - Firefox
 - VLC (`pacman -S vlc`)
 - Python 3
+- Optional: yt-dlp (`pacman -S yt-dlp`) for resolving web pages without a captured direct stream
 
-## Setup
+## Installation
 
 1. Install the native messaging host:
 
@@ -29,8 +36,10 @@ This project handles strictly non-DRM direct URLs. It does not bypass DRM or ext
 
 ## Usage
 
-- Right-click a direct link or media element and choose **Open in VLC**.
-- Click the extension toolbar icon while watching an active video.
+- Browse to a page with media. The toolbar button shows a `▶` badge when a stream is detected; click it to open the captured stream in VLC.
+- Right-click a direct media link or media element and choose **Open in VLC**.
+- If no direct stream was captured, click the extension icon or right-click the web page to ask local yt-dlp to resolve the stream. Install yt-dlp for this fallback.
+- The captured request Referer is forwarded automatically to VLC for hotlink-protected streams.
 
 ## Running tests
 
