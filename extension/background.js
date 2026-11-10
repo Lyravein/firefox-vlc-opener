@@ -1,5 +1,7 @@
 const NATIVE_HOST_NAME = "vlc_opener";
 const tracker = createStreamTracker();
+let activePrefetchJob = null;
+const tabStreamResolvers = new Map();
 
 browser.webRequest.onBeforeSendHeaders.addListener((details) => {
   tracker.trackRequest(details.requestId, details.tabId, details.url, details.requestHeaders);
@@ -11,6 +13,11 @@ browser.webRequest.onHeadersReceived.addListener((details) => {
     browser.action.setBadgeText({ tabId: details.tabId, text: "▶" });
     browser.action.setBadgeBackgroundColor({ tabId: details.tabId, color: "#e66014" });
     browser.tabs.sendMessage(details.tabId, { action: "STREAM_DETECTED" }).catch(() => {});
+    const resolver = tabStreamResolvers.get(details.tabId);
+    if (resolver) {
+      tabStreamResolvers.delete(details.tabId);
+      resolver(tracker.getBestStream(details.tabId));
+    }
   }
 }, { urls: ["<all_urls>"] }, ["responseHeaders"]);
 
@@ -40,6 +47,71 @@ function findPageVideoUrl() {
   return video ? { found: true, url: video.currentSrc || video.src } : { found: false };
 }
 
+async function prefetchNextEpisodeStream(nextEpisodeUrl, timeoutMs = 15000) {
+  if (activePrefetchJob) return null;
+  activePrefetchJob = nextEpisodeUrl;
+  let tab = null;
+  let onUpdatedListener = null;
+  let onRemovedListener = null;
+  let timer = null;
+
+  try {
+    tab = await browser.tabs.create({ url: nextEpisodeUrl, active: false });
+    await browser.tabs.update(tab.id, { muted: true }).catch(() => {});
+
+    const existing = tracker.getBestStream(tab.id);
+    if (existing) return existing;
+
+    onUpdatedListener = (tabId, changeInfo) => {
+      if (tabId === tab.id && changeInfo.status === "complete") {
+        browser.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          func: () => {
+            const v = document.querySelector("video");
+            if (v) v.play().catch(() => {});
+            const btn = document.querySelector(".play-button, [aria-label*='play' i], .vjs-big-play-button");
+            if (btn) btn.click();
+          }
+        }).catch(() => {});
+      }
+    };
+    browser.tabs.onUpdated.addListener(onUpdatedListener);
+
+    onRemovedListener = (tabId) => {
+      if (tabId === tab.id) {
+        const r = tabStreamResolvers.get(tab.id);
+        if (r) {
+          tabStreamResolvers.delete(tab.id);
+          r(null);
+        }
+      }
+    };
+    browser.tabs.onRemoved.addListener(onRemovedListener);
+
+    const streamPromise = new Promise((resolve) => {
+      tabStreamResolvers.set(tab.id, resolve);
+    });
+    const timeoutPromise = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        tabStreamResolvers.delete(tab.id);
+        resolve(null);
+      }, timeoutMs);
+    });
+
+    const stream = await Promise.race([streamPromise, timeoutPromise]);
+    clearTimeout(timer);
+    return stream;
+  } finally {
+    if (onUpdatedListener) browser.tabs.onUpdated.removeListener(onUpdatedListener);
+    if (onRemovedListener) browser.tabs.onRemoved.removeListener(onRemovedListener);
+    if (tab && tab.id) {
+      await browser.tabs.remove(tab.id).catch(() => {});
+      tracker.cleanupTab(tab.id);
+    }
+    activePrefetchJob = null;
+  }
+}
+
 async function handleVlcTrigger(tab, meta = {}) {
   if (!tab || !tab.id) return;
   let launchResult = null;
@@ -58,9 +130,16 @@ async function handleVlcTrigger(tab, meta = {}) {
   }
   if (launchResult?.ok) {
     if (meta.nextEpisode && meta.nextEpisode.url) {
-      notify("VLC Opener", "Buffering Episode " + meta.nextEpisode.number + " into playlist...");
-      const queueRes = await sendUrlToVlc(meta.nextEpisode.url, tab.url, false, true);
-      if (queueRes?.ok) notify("VLC Opener", "Enqueued Episode " + meta.nextEpisode.number + " into VLC playlist.");
+      notify("VLC Opener", "Pre-fetching Episode " + meta.nextEpisode.number + " in background...");
+      const captured = await prefetchNextEpisodeStream(meta.nextEpisode.url, 15000);
+      if (captured && captured.url) {
+        const queueRes = await sendUrlToVlc(captured.url, captured.referer || meta.nextEpisode.url, true, true);
+        if (queueRes?.ok) notify("VLC Opener", "Enqueued Episode " + meta.nextEpisode.number + " into VLC playlist.");
+      } else {
+        notify("VLC Opener", "Resolving Episode " + meta.nextEpisode.number + " via yt-dlp fallback...");
+        const queueRes = await sendUrlToVlc(meta.nextEpisode.url, tab.url, false, true);
+        if (queueRes?.ok) notify("VLC Opener", "Enqueued Episode " + meta.nextEpisode.number + " into VLC playlist.");
+      }
     } else if (meta.isLast) {
       notify("VLC Opener", "There's no episode left! (Enjoy the final episode)");
     }
