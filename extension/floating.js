@@ -1,121 +1,164 @@
-if (window.__vlc_opener_injected) return;
-window.__vlc_opener_injected = true;
+(function () {
+  if (window.__vlc_opener_injected) return;
+  window.__vlc_opener_injected = true;
 
-if (window.self !== window.top && (window.innerWidth < 150 || window.innerHeight < 150)) {
-  return;
-}
-
-const host = document.createElement("div");
-host.id = "vlc-opener-floating-root";
-const shadow = host.attachShadow({ mode: "open" });
-const style = document.createElement("style");
-style.textContent = `
-  :host { position: fixed; bottom: 24px; right: 24px; z-index: 2147483647; }
-  .container { display: flex; flex-direction: column; align-items: center; }
-  .ep-pill { display: none; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10px; font-weight: 600; color: #f8fafc; background: #1a1e28; border: 1px solid #e66014; border-radius: 999px; padding: 2px 7px; margin-bottom: 4px; text-align: center; white-space: nowrap; user-select: none; pointer-events: none; }
-  .ep-pill.visible { display: block; }
-  .ep-pill.final { border-color: #94a3b8; color: #cbd5e1; }
-  button { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 2px solid #e66014; border-radius: 50%; background: #1a1e28; color: white; cursor: pointer; transition: transform 120ms ease, border-color 120ms ease; }
-  button:hover { transform: scale(1.08); border-color: #ff812e; }
-  button.active { border-color: #22c55e; box-shadow: 0 0 12px #22c55e99; }
-  .badge { display: none; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e; }
-  button.active .badge { display: block; animation: pulse 1.4s infinite; }
-  @keyframes pulse { 50% { opacity: .45; transform: scale(.8); } }
-`;
-const container = document.createElement("div");
-container.className = "container";
-const pill = document.createElement("div");
-pill.className = "ep-pill";
-const button = document.createElement("button");
-button.type = "button";
-button.title = "Open in VLC (Drag to move)";
-button.setAttribute("aria-label", "Open in VLC");
-button.innerHTML = '<svg width="25" height="30" viewBox="0 0 24 30" aria-hidden="true"><path fill="#fff" d="M4 2h16l-2 5H6z"/><path fill="#e66014" d="M6 8h12l-2 5H8z"/><path fill="#fff" d="M8 14h8l-2 5h-4z"/><path fill="#e66014" d="M10 20h4l-2 7z"/></svg><span class="badge"></span>';
-container.append(pill, button);
-shadow.append(style, container);
-
-function scanPageEpisodes() {
-  if (typeof parseEpisodes !== "function") return { episodes: [], currentEpisode: null, totalEpisodes: 0, nextEpisode: null };
-  return parseEpisodes({
-    url: window.location.href,
-    title: document.title,
-    links: Array.from(document.querySelectorAll("a[href]")).map(a => ({ href: a.href, text: a.textContent || "", className: a.className || "" })),
-    options: Array.from(document.querySelectorAll("select option")).map(o => ({ value: o.value || "", text: o.textContent || "", selected: Boolean(o.selected) }))
-  });
-}
-
-function updateEpisodeBadge(info) {
-  if (info.totalEpisodes >= 2) {
-    pill.textContent = `Ep ${info.currentEpisode || "?"} / ${info.totalEpisodes}`;
-    pill.title = `Episode ${info.currentEpisode || "?"} of ${info.totalEpisodes}`;
-    pill.classList.add("visible");
-    if (!info.nextEpisode && info.currentEpisode !== null) pill.classList.add("final");
-    else pill.classList.remove("final");
-  } else {
-    pill.classList.remove("visible", "final");
-  }
-}
-
-updateEpisodeBadge(scanPageEpisodes());
-
-function markActive() {
-  button.classList.add("active");
-}
-
-browser.runtime.onMessage.addListener((message) => {
-  if (message.action === "STREAM_DETECTED") markActive();
-});
-
-browser.runtime.sendMessage({ action: "GET_STREAM_STATUS" }).then((response) => {
-  if (response && response.hasStream) markActive();
-}).catch(() => {});
-if (document.querySelector("video")) markActive();
-
-let dragging = false;
-let wasDragged = false;
-let startX = 0;
-let startY = 0;
-let initialLeft = 0;
-let initialTop = 0;
-button.addEventListener("mousedown", (event) => {
-  if (event.button !== 0) return;
-  dragging = true;
-  wasDragged = false;
-  startX = event.clientX;
-  startY = event.clientY;
-  const rect = host.getBoundingClientRect();
-  initialLeft = rect.left;
-  initialTop = rect.top;
-  event.preventDefault();
-});
-document.addEventListener("mousemove", (event) => {
-  if (!dragging) return;
-  const dx = event.clientX - startX;
-  const dy = event.clientY - startY;
-  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) wasDragged = true;
-  if (!wasDragged) return;
-  const left = Math.max(0, Math.min(window.innerWidth - 44, initialLeft + dx));
-  const top = Math.max(0, Math.min(window.innerHeight - 44, initialTop + dy));
-  host.style.left = `${left}px`;
-  host.style.top = `${top}px`;
-  host.style.bottom = "auto";
-  host.style.right = "auto";
-});
-document.addEventListener("mouseup", () => {
-  dragging = false;
-});
-button.addEventListener("click", () => {
-  if (wasDragged) {
-    wasDragged = false;
+  if (window.self !== window.top && (window.innerWidth < 150 || window.innerHeight < 150)) {
     return;
   }
-  const currentEpInfo = scanPageEpisodes();
-  browser.runtime.sendMessage({
-    action: "TRIGGER_VLC",
-    nextEpisode: currentEpInfo.nextEpisode,
-    currentEpisode: currentEpInfo.currentEpisode,
-    totalEpisodes: currentEpInfo.totalEpisodes,
-    isLast: Boolean(currentEpInfo.totalEpisodes >= 2 && currentEpInfo.currentEpisode !== null && !currentEpInfo.nextEpisode)
+
+  const host = document.createElement("div");
+  host.id = "vlc-opener-floating-root";
+  host.style.cssText = "all: initial; position: fixed !important; bottom: 24px !important; right: 24px !important; z-index: 2147483647 !important; pointer-events: auto !important;";
+  const shadow = host.attachShadow({ mode: "open" });
+
+  const targetRoot = document.body || document.documentElement;
+  if (targetRoot) targetRoot.appendChild(host);
+  else document.addEventListener("DOMContentLoaded", () => (document.body || document.documentElement).appendChild(host));
+
+  const style = document.createElement("style");
+  style.textContent = `
+    :host { position: fixed !important; bottom: 24px !important; right: 24px !important; z-index: 2147483647 !important; pointer-events: auto !important; }
+    .vlc-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 14px;
+      border: 2px solid #e66014;
+      border-radius: 999px;
+      background: #151922;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+      user-select: none;
+    }
+    .vlc-pill:hover {
+      transform: scale(1.05);
+      border-color: #ff8533;
+      box-shadow: 0 6px 22px rgba(230, 96, 20, 0.35);
+    }
+    .vlc-pill.active {
+      border-color: #22c55e;
+      box-shadow: 0 0 14px rgba(34, 197, 94, 0.45);
+    }
+    .dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #e66014;
+      transition: background 150ms ease;
+    }
+    .vlc-pill.active .dot {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+      animation: pulse 1.4s infinite;
+    }
+    @keyframes pulse { 50% { opacity: 0.4; transform: scale(0.8); } }
+    .label {
+      line-height: 1;
+      white-space: nowrap;
+    }
+  `;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "vlc-pill";
+  button.title = "Open in VLC (Drag to move)";
+  button.setAttribute("aria-label", "Open in VLC");
+  button.innerHTML = '<svg width="18" height="22" viewBox="0 0 18 22" aria-hidden="true"><path fill="#ffffff" d="M3 1h12l-1.5 3.5h-9z"/><path fill="#e66014" d="M4.5 4.5h9L12 8H6z"/><path fill="#ffffff" d="M6 8h6l-1.5 3.5h-3z"/><path fill="#e66014" d="M7.5 11.5h3L9 21z"/></svg><span class="label">Open in VLC</span><span class="dot"></span>';
+
+  const label = button.querySelector(".label");
+  shadow.append(style, button);
+
+  function scanPageEpisodes() {
+    try {
+      if (typeof parseEpisodes !== "function") return { episodes: [], currentEpisode: null, totalEpisodes: 0, nextEpisode: null };
+      return parseEpisodes({
+        url: window.location.href,
+        title: document.title,
+        links: Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.href, text: a.textContent || "", className: a.className || "" })),
+        options: Array.from(document.querySelectorAll("select option")).map((o) => ({ value: o.value || "", text: o.textContent || "", selected: Boolean(o.selected) })),
+      });
+    } catch {
+      return { episodes: [], currentEpisode: null, totalEpisodes: 0, nextEpisode: null };
+    }
+  }
+
+  function updateLabel(info) {
+    if (info.totalEpisodes >= 2) {
+      const text = `Ep ${info.currentEpisode || "?"} / ${info.totalEpisodes}`;
+      label.textContent = `${text} \u00b7 Open in VLC`;
+      button.title = `Episode ${info.currentEpisode || "?"} of ${info.totalEpisodes} (Drag to move)`;
+    } else {
+      label.textContent = "Open in VLC";
+      button.title = "Open in VLC (Drag to move)";
+    }
+  }
+
+  updateLabel(scanPageEpisodes());
+
+  function markActive() {
+    button.classList.add("active");
+  }
+
+  browser.runtime.onMessage.addListener((message) => {
+    if (message.action === "STREAM_DETECTED") markActive();
   });
-});
-(document.documentElement || document.body).appendChild(host);
+
+  browser.runtime.sendMessage({ action: "GET_STREAM_STATUS" }).then((response) => {
+    if (response && response.hasStream) markActive();
+  }).catch(() => {});
+  if (document.querySelector("video")) markActive();
+
+  let dragging = false;
+  let wasDragged = false;
+  let startX = 0;
+  let startY = 0;
+  let initialLeft = 0;
+  let initialTop = 0;
+  button.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    wasDragged = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    const rect = host.getBoundingClientRect();
+    initialLeft = rect.left;
+    initialTop = rect.top;
+    event.preventDefault();
+  });
+  document.addEventListener("mousemove", (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (!wasDragged && Math.hypot(dx, dy) <= 4) return;
+    wasDragged = true;
+    const left = Math.max(0, Math.min(window.innerWidth - 44, initialLeft + dx));
+    const top = Math.max(0, Math.min(window.innerHeight - 44, initialTop + dy));
+    host.style.left = `${left}px`;
+    host.style.top = `${top}px`;
+    host.style.bottom = "auto";
+    host.style.right = "auto";
+  });
+  document.addEventListener("mouseup", () => {
+    dragging = false;
+  });
+  button.addEventListener("click", () => {
+    if (wasDragged) {
+      wasDragged = false;
+      return;
+    }
+    const currentEpInfo = scanPageEpisodes();
+    browser.runtime.sendMessage({
+      action: "TRIGGER_VLC",
+      nextEpisode: currentEpInfo.nextEpisode,
+      currentEpisode: currentEpInfo.currentEpisode,
+      totalEpisodes: currentEpInfo.totalEpisodes,
+      isLast: Boolean(currentEpInfo.totalEpisodes >= 2 && currentEpInfo.currentEpisode !== null && !currentEpInfo.nextEpisode),
+    });
+  });
+})();

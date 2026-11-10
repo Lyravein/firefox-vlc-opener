@@ -1,9 +1,17 @@
+function extractString(val) {
+  if (!val) return "";
+  if (typeof val === "string") return val;
+  if (typeof val === "object" && typeof val.baseVal === "string") return val.baseVal;
+  return String(val);
+}
+
 function parseEpisodes(documentContext) {
   const baseUrl = documentContext?.url || "";
   const resolveUrl = (raw) => {
-    if (!raw || /^javascript:/i.test(raw) || raw.startsWith("#")) return null;
+    const str = extractString(raw);
+    if (!str || /^javascript:/i.test(str) || str.startsWith("#")) return null;
     try {
-      return new URL(raw, baseUrl).href;
+      return new URL(str, baseUrl).href;
     } catch {
       return null;
     }
@@ -19,11 +27,14 @@ function parseEpisodes(documentContext) {
   }
 
   for (const item of sources) {
-    const textMatch = (item.text || "").match(/(?:episode|eps|ep)[.\s-]*(\d+)/i);
-    const match = textMatch || (item.href || item.value || "").match(/(?:^|[/-])ep(?:isode)?[.-]?(\d+)(?:[/-]|\.html|$)/i);
+    const text = extractString(item.text);
+    const href = extractString(item.href);
+    const value = extractString(item.value);
+    const textMatch = text.match(/(?:episode|eps|ep)[.\s-]*(\d+)/i);
+    const match = textMatch || (href || value).match(/(?:^|[/-])ep(?:isode)?[.-]?(\d+)(?:[/-]|\.html|$)/i);
     if (!match) continue;
     const number = parseInt(match[1], 10);
-    const url = resolveUrl(item.href || item.value);
+    const url = resolveUrl(href || value);
     if (number > 0 && url) candidates.push({ number, url, active: /active|current/i.test(item.className || "") || item.selected });
   }
 

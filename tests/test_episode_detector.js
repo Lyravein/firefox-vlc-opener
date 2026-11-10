@@ -74,11 +74,31 @@ function testSingleVideoOrNoiseIgnored() {
   assert.strictEqual(result.nextEpisode, null);
 }
 
+function testSvgLinksAndMalformedHrefs() {
+  const docContext = {
+    url: "https://example.com/anime/tsuki/ep-1",
+    title: "Anime Episode 1",
+    links: [
+      { href: { baseVal: "https://example.com/anime/tsuki/ep-1" }, text: "Ep 1", className: "active" },
+      { href: "https://example.com/anime/tsuki/ep-2", text: "Ep 2", className: "" },
+      { href: null, text: "Ep 3", className: "" },
+      { href: "javascript:void(0)", text: "Ep 4", className: "" }
+    ],
+    options: []
+  };
+  const result = parseEpisodes(docContext);
+  assert.strictEqual(result.totalEpisodes, 2);
+  assert.strictEqual(result.currentEpisode, 1);
+  assert.strictEqual(result.nextEpisode.number, 2);
+  assert.strictEqual(result.nextEpisode.url, "https://example.com/anime/tsuki/ep-2");
+}
+
 function runAll() {
   testStandardEpisodeList();
   testSelectDropdownAndRelativeUrls();
   testFinalEpisode();
   testSingleVideoOrNoiseIgnored();
+  testSvgLinksAndMalformedHrefs();
   console.log("Episode detector unit tests PASSED.");
 }
 
