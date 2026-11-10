@@ -19,7 +19,7 @@ class TestLauncher(unittest.TestCase):
         mock_popen.assert_called_once()
         args, kwargs = mock_popen.call_args
         cmd = args[0]
-        self.assertEqual(cmd, ["/usr/bin/vlc", "--", "https://example.com/test.mp4"])
+        self.assertEqual(cmd, ["/usr/bin/vlc", "--one-instance", "--", "https://example.com/test.mp4"])
         self.assertTrue(kwargs.get("start_new_session"))
 
     @patch("shutil.which", return_value=None)
@@ -39,7 +39,7 @@ class TestLauncher(unittest.TestCase):
         self.assertTrue(ok)
         args, kwargs = mock_popen.call_args
         cmd = args[0]
-        self.assertEqual(cmd, ["/usr/bin/vlc", "--http-referrer", "https://anime.example.com/", "--", "https://cdn.example.com/video.mp4"])
+        self.assertEqual(cmd, ["/usr/bin/vlc", "--one-instance", "--http-referrer", "https://anime.example.com/", "--", "https://cdn.example.com/video.mp4"])
 
     @patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}")
     @patch("subprocess.run")
@@ -76,7 +76,33 @@ class TestLauncher(unittest.TestCase):
         self.assertIn("--referer", run_cmd)
         self.assertIn("https://page.com", run_cmd)
         vlc_cmd = mock_popen.call_args[0][0]
-        self.assertEqual(vlc_cmd, ["/usr/bin/vlc", "--http-referrer", "https://page.com", "--", "https://resolved.cdn.com/stream.m3u8"])
+        self.assertEqual(vlc_cmd, ["/usr/bin/vlc", "--one-instance", "--http-referrer", "https://page.com", "--", "https://resolved.cdn.com/stream.m3u8"])
+
+    @patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}")
+    @patch("subprocess.Popen")
+    def test_launch_vlc_enqueue_flag(self, mock_popen, mock_which):
+        mock_proc = MagicMock()
+        mock_proc.pid = 9999
+        mock_popen.return_value = mock_proc
+
+        ok, msg = launch_vlc("https://example.com/test.mp4", enqueue=True)
+        self.assertTrue(ok)
+        args, _ = mock_popen.call_args
+        cmd = args[0]
+        self.assertEqual(cmd, ["/usr/bin/vlc", "--one-instance", "--playlist-enqueue", "--", "https://example.com/test.mp4"])
+
+    @patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}")
+    @patch("subprocess.Popen")
+    def test_launch_vlc_enqueue_false_omits_playlist_enqueue(self, mock_popen, mock_which):
+        mock_proc = MagicMock()
+        mock_proc.pid = 9999
+        mock_popen.return_value = mock_proc
+
+        ok, msg = launch_vlc("https://example.com/test.mp4", enqueue=False)
+        self.assertTrue(ok)
+        args, _ = mock_popen.call_args
+        cmd = args[0]
+        self.assertEqual(cmd, ["/usr/bin/vlc", "--one-instance", "--", "https://example.com/test.mp4"])
 
     @patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}")
     @patch("subprocess.run")

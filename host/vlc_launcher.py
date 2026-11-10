@@ -22,6 +22,7 @@ def launch_vlc(
     url: str,
     referer: str | None = None,
     mode: str = "direct",
+    enqueue: bool = False,
     vlc_bin: str = "vlc",
     ytdlp_bin: str = "yt-dlp",
 ) -> tuple[bool, str]:
@@ -49,7 +50,9 @@ def launch_vlc(
             if not is_valid:
                 return False, f"Extracted stream URL rejected by security policy: {clean_extracted}"
             target_url = clean_extracted
-        vlc_cmd = [resolved_vlc]
+        vlc_cmd = [resolved_vlc, "--one-instance"]
+        if enqueue:
+            vlc_cmd.append("--playlist-enqueue")
         if referer:
             vlc_cmd.extend(["--http-referrer", referer])
         vlc_cmd.extend(["--", target_url])

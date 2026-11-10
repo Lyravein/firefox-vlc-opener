@@ -21,13 +21,14 @@ def main() -> None:
 
     referer = message.get("referer")
     is_direct = bool(message.get("is_direct", False))
+    enqueue = bool(message.get("enqueue", False))
     valid, mode, clean_url, clean_ref = validate_request(message["url"], referer=referer, is_direct=is_direct)
     if not valid:
         write_message(sys.stdout.buffer, {"success": False, "error": clean_url})
         return
-    launched, launch_msg = launch_vlc(clean_url, referer=clean_ref, mode=mode)
+    launched, launch_msg = launch_vlc(clean_url, referer=clean_ref, mode=mode, enqueue=enqueue)
     if launched:
-        write_message(sys.stdout.buffer, {"success": True, "message": launch_msg, "url": clean_url, "mode": mode})
+        write_message(sys.stdout.buffer, {"success": True, "message": launch_msg, "url": clean_url, "mode": mode, "enqueue": enqueue})
     else:
         write_message(sys.stdout.buffer, {"success": False, "error": launch_msg})
 
