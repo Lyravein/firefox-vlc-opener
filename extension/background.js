@@ -40,24 +40,34 @@ function findPageVideoUrl() {
   return video ? { found: true, url: video.currentSrc || video.src } : { found: false };
 }
 
-async function handleVlcTrigger(tab) {
+async function handleVlcTrigger(tab, meta = {}) {
   if (!tab || !tab.id) return;
+  let launchResult = null;
   const best = tracker.getBestStream(tab.id);
   if (best) {
-    sendUrlToVlc(best.url, best.referer, true);
-    return;
+    launchResult = await sendUrlToVlc(best.url, best.referer, true, false);
+  } else {
+    try {
+      const results = await browser.scripting.executeScript({ target: { tabId: tab.id }, func: findPageVideoUrl });
+      const outcome = results[0]?.result;
+      if (outcome?.found) launchResult = await sendUrlToVlc(outcome.url, tab.url, true, false);
+      else launchResult = await sendUrlToVlc(tab.url, tab.url, false, false);
+    } catch {
+      launchResult = await sendUrlToVlc(tab.url, tab.url, false, false);
+    }
   }
-  try {
-    const results = await browser.scripting.executeScript({ target: { tabId: tab.id }, func: findPageVideoUrl });
-    const outcome = results[0]?.result;
-    if (outcome?.found) sendUrlToVlc(outcome.url, tab.url, true);
-    else sendUrlToVlc(tab.url, tab.url, false);
-  } catch {
-    sendUrlToVlc(tab.url, tab.url, false);
+  if (launchResult?.ok) {
+    if (meta.nextEpisode && meta.nextEpisode.url) {
+      notify("VLC Opener", "Buffering Episode " + meta.nextEpisode.number + " into playlist...");
+      const queueRes = await sendUrlToVlc(meta.nextEpisode.url, tab.url, false, true);
+      if (queueRes?.ok) notify("VLC Opener", "Enqueued Episode " + meta.nextEpisode.number + " into VLC playlist.");
+    } else if (meta.isLast) {
+      notify("VLC Opener", "There's no episode left! (Enjoy the final episode)");
+    }
   }
 }
 
-browser.action.onClicked.addListener(handleVlcTrigger);
+browser.action.onClicked.addListener((tab) => handleVlcTrigger(tab, {}));
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "GET_STREAM_STATUS") {
@@ -68,7 +78,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.action === "TRIGGER_VLC") {
     const tab = sender.tab;
-    if (tab) handleVlcTrigger(tab);
+    if (tab) handleVlcTrigger(tab, message);
   }
 });
 
@@ -80,12 +90,17 @@ function notify(title, message) {
   browser.notifications.create({ type: "basic", iconUrl: "icons/icon-48.png", title, message });
 }
 
-async function sendUrlToVlc(url, referer = null, isDirect = false) {
+async function sendUrlToVlc(url, referer = null, isDirect = false, enqueue = false) {
   try {
-    const response = await browser.runtime.sendNativeMessage(NATIVE_HOST_NAME, { url, referer, is_direct: isDirect });
-    if (response.success) notify("VLC Opener", "Launching VLC for: " + truncateUrl(response.url || url));
-    else notify("VLC Opener", response.error);
+    const response = await browser.runtime.sendNativeMessage(NATIVE_HOST_NAME, { url, referer, is_direct: isDirect, enqueue });
+    if (response.success) {
+      if (!enqueue) notify("VLC Opener", "Launching VLC for: " + truncateUrl(response.url || url));
+      return { ok: true, response };
+    }
+    notify("VLC Opener", response.error || "Failed to launch VLC.");
+    return { ok: false, response };
   } catch (error) {
     notify("VLC Opener", error.message);
+    return { ok: false, response: { error: error.message } };
   }
 }
