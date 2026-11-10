@@ -55,3 +55,7 @@ This project handles strictly non-DRM media. It does not bypass DRM or extract c
 python3 -m pytest -v
 bash test_cli_pipe.sh
 ```
+
+## License
+
+This project is licensed under the MIT License: see the [LICENSE](LICENSE) file for details.
