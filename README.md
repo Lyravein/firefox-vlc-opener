@@ -11,6 +11,7 @@ Firefox VLC Opener is a Firefox extension and Linux native messaging host for op
 5. **Episode Detection and Badge:** Automatically detects episode lists and shows `Ep X / Y` on the floating button when at least 2 episodes exist on the page.
 6. **Seamless Next Episode Auto-Queuing:** When watching an episode, the extension automatically resolves and buffers the subsequent episode into the VLC playlist (`--playlist-enqueue`) so playback continues without interruption.
 7. **Series Completion Notice:** Notifies the user with "There's no episode left! (Enjoy the final episode)" when reaching the final episode of a series.
+8. **Silent Background Tab Pre-fetching:** Automatically opens a muted, non-active background tab to capture streams on websites with custom video players not recognized by yt-dlp, closing the tab as soon as media is detected.
 
 ## Security and scope
 
@@ -46,6 +47,7 @@ This project handles strictly non-DRM media. It does not bypass DRM or extract c
 - If no direct stream was captured, click the extension icon or right-click the web page to ask local yt-dlp to resolve the stream. Install yt-dlp for this fallback.
 - The captured request Referer is forwarded automatically to VLC for hotlink-protected streams.
 - On pages with at least 2 detected episodes, the floating button shows the current position as `Ep X / Y`. While watching an episode, the next episode is resolved and queued in VLC automatically with `--playlist-enqueue`; when you reach the series finale, the extension displays "There's no episode left! (Enjoy the final episode)".
+- For websites using custom web players unsupported by yt-dlp, the extension silently pre-fetches the next episode in a muted background tab to capture its direct stream, then automatically closes the tab.
 
 ## Running tests
 
