@@ -49,7 +49,7 @@ function updateEpisodeBadge(info) {
     pill.textContent = `Ep ${info.currentEpisode || "?"} / ${info.totalEpisodes}`;
     pill.title = `Episode ${info.currentEpisode || "?"} of ${info.totalEpisodes}`;
     pill.classList.add("visible");
-    if (info.currentEpisode === info.totalEpisodes) pill.classList.add("final");
+    if (!info.nextEpisode && info.currentEpisode !== null) pill.classList.add("final");
     else pill.classList.remove("final");
   } else {
     pill.classList.remove("visible", "final");
