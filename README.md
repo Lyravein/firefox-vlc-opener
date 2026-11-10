@@ -8,6 +8,9 @@ Firefox VLC Opener is a Firefox extension and Linux native messaging host for op
 2. **yt-dlp Fallback Resolver:** If no direct stream is captured, clicking the extension icon or right-clicking a web page uses local `yt-dlp` to extract the underlying video stream.
 3. **Hotlink Referer Forwarding:** Automatically captures and passes the wire `Referer` to VLC using `--http-referrer`, helping prevent CDN 403 Forbidden errors.
 4. **In-Page Floating Button:** A lightweight draggable button injected into pages using Shadow DOM, allowing one-click VLC playback on websites that disable or intercept right-click context menus.
+5. **Episode Detection and Badge:** Automatically detects episode lists and shows `Ep X / Y` on the floating button when at least 2 episodes exist on the page.
+6. **Seamless Next Episode Auto-Queuing:** When watching an episode, the extension automatically resolves and buffers the subsequent episode into the VLC playlist (`--playlist-enqueue`) so playback continues without interruption.
+7. **Series Completion Notice:** Notifies the user with "There's no episode left! (Enjoy the final episode)" when reaching the final episode of a series.
 
 ## Security and scope
 
@@ -42,6 +45,7 @@ This project handles strictly non-DRM media. It does not bypass DRM or extract c
 - Click the draggable floating button on the page (marked with a green glowing indicator when a stream or video is detected) to launch VLC directly without using context menus.
 - If no direct stream was captured, click the extension icon or right-click the web page to ask local yt-dlp to resolve the stream. Install yt-dlp for this fallback.
 - The captured request Referer is forwarded automatically to VLC for hotlink-protected streams.
+- On pages with at least 2 detected episodes, the floating button shows the current position as `Ep X / Y`. While watching an episode, the next episode is resolved and queued in VLC automatically with `--playlist-enqueue`; when you reach the series finale, the extension displays "There's no episode left! (Enjoy the final episode)".
 
 ## Running tests
 

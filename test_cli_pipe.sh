@@ -5,7 +5,8 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 mkdir -p "$tmp_dir/bin"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp_dir/bin/vlc"
+export VLC_LOG="$tmp_dir/vlc-args.log"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$VLC_LOG"\nexit 0\n' > "$tmp_dir/bin/vlc"
 printf '#!/usr/bin/env bash\ntouch "$YTDLP_CALLED"\nprintf "%%s\\n" "https://resolved.example.com/playlist.m3u8"\n' > "$tmp_dir/bin/yt-dlp"
 chmod +x "$tmp_dir/bin/vlc" "$tmp_dir/bin/yt-dlp"
 export YTDLP_CALLED="$tmp_dir/ytdlp-called"
@@ -14,6 +15,7 @@ export PATH="$tmp_dir/bin:$PATH"
 ln -s "$repo_dir/host/vlc_opener_host.py" "$tmp_dir/bin/vlc-opener-host"
 python3 - "$repo_dir/host/vlc_opener_host.py" "$tmp_dir/bin/vlc-opener-host" <<'PY'
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -41,6 +43,13 @@ def expect_error(payload, word):
 
 response = run(json.dumps({"url": "https://example.com/sample.mp4"}).encode())
 assert response.get("success") is True, response
+response = run(json.dumps({"url": "https://example.com/video1.mp4", "enqueue": False}).encode())
+assert response.get("success") is True and response.get("enqueue") is False, response
+response = run(json.dumps({"url": "https://example.com/video2.mp4", "enqueue": True}).encode())
+assert response.get("success") is True and response.get("enqueue") is True, response
+with open(os.environ["VLC_LOG"], encoding="utf-8") as log:
+    last_vlc_args = log.readlines()[-1]
+assert "--one-instance" in last_vlc_args and "--playlist-enqueue" in last_vlc_args, last_vlc_args
 response = run(json.dumps({"url": "https://example.com/anime/episode-1", "referer": "https://example.com/"}).encode())
 assert response.get("success") is True and response.get("mode") == "ytdlp", response
 import os
